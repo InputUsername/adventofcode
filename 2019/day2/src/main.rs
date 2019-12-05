@@ -17,7 +17,7 @@ fn part1(mut input: Vec<i64>) {
     input[1] = 12;
     input[2] = 2;
 
-    intcode::interpret(&mut input);
+    let _ = intcode::interpret(&mut input, &[]);
 
     println!("{}", input[0]);
 }
@@ -32,7 +32,7 @@ fn part2(input: Vec<i64>) {
             mem[1] = noun;
             mem[2] = verb;
 
-            intcode::interpret(&mut mem);
+            let _ = intcode::interpret(&mut mem, &[]);
 
             if mem[0] == 19690720 {
                 println!("{}", 100 * noun + verb);
