@@ -5,6 +5,13 @@ const MAX_PARAMETERS: usize = 3;
 type ParameterModes = [i64; MAX_PARAMETERS];
 type Instruction = (i64, ParameterModes);
 
+pub enum InterpretStep {
+    Input,
+    Output(String),
+    Halt,
+    Nothing,
+}
+
 /// Parse a single instruction into an opcode and the parameter modes.
 fn parse_instruction(instruction: i64) -> Instruction {
     let opcode = instruction % 100;
@@ -82,6 +89,89 @@ fn dump_memory(pc: usize, mem: &[i64]) {
     eprintln!("{}", "-".repeat(SIZE * PAD));
 }
 
+/// Perform a single instruction and return its side effect (input, output, halt or nothing).
+pub fn interpret_step(mem: &mut [i64], pc: &mut usize, input: Option<String>) -> InterpretStep {
+    let (opcode, modes) = parse_instruction(mem[*pc]);
+    match opcode {
+        // add
+        1 | 2 => {
+            let (a, b, dest) = get_ternary_op_params(*pc, mem, &modes);
+
+            match opcode {
+                1 => mem[dest] = a + b,
+                2 => mem[dest] = a * b,
+                // other opcodes are filtered by the outer match, so this is fine
+                _ => unreachable!(),
+            }
+
+            *pc += 4;
+        }
+        // input
+        3 => {
+            let dest: usize = mem[*pc + 1].try_into().unwrap();
+
+            let input = input.unwrap();
+
+            let value = input.trim().parse()
+                .expect(&format!("Not a number: {}", input));
+
+            mem[dest] = value;
+
+            *pc += 2;
+
+            return InterpretStep::Input;
+        }
+        // output
+        4 => {
+            let value = get_parameter_value(1, *pc, mem, &modes);
+
+            *pc += 2;
+
+            return InterpretStep::Output(value.to_string());
+        }
+        // jump-if-true, jump-if-false
+        5 | 6 => {
+            let (value, dest) = get_jump_op_params(*pc, mem, &modes);
+
+            let condition = match opcode {
+                5 => value != 0,
+                6 => value == 0,
+                // other opcodes are filtered by the outer match, so this is fine
+                _ => unreachable!(),
+            };
+
+            if condition {
+                *pc = dest;
+            } else {
+                *pc += 3;
+            }
+        }
+        // less than, equals
+        7 | 8 => {
+            let (a, b, dest) = get_ternary_op_params(*pc, mem, &modes);
+
+            let condition = match opcode {
+                7 => a < b,
+                8 => a == b,
+                // other opcodes are filtered by the outer match, so this is fine
+                _ => unreachable!(),
+            };
+
+            mem[dest] = if condition { 1 } else { 0 };
+
+            *pc += 4;
+        }
+        // halt
+        99 => return InterpretStep::Halt,
+        _ => {
+            dump_memory(*pc, mem);
+            panic!("Unknown opcode: {}", opcode);
+        }
+    }
+
+    InterpretStep::Nothing
+}
+
 /// Interpret an Intcode program stored in `mem`, using `inputs` to simulate input,
 /// and return a vector of all output values.
 pub fn interpret(mem: &mut [i64], inputs: &[String]) -> Vec<String> {
@@ -91,80 +181,11 @@ pub fn interpret(mem: &mut [i64], inputs: &[String]) -> Vec<String> {
     let mut outputs = Vec::new();
 
     loop {
-        let (opcode, modes) = parse_instruction(mem[pc]);
-        match opcode {
-            // add
-            1 | 2 => {
-                let (a, b, dest) = get_ternary_op_params(pc, mem, &modes);
-
-                match opcode {
-                    1 => mem[dest] = a + b,
-                    2 => mem[dest] = a * b,
-                    // other opcodes are filtered by the outer match, so this is fine
-                    _ => unreachable!(),
-                }
-
-                pc += 4;
-            }
-            // input
-            3 => {
-                let dest: usize = mem[pc + 1].try_into().unwrap();
-
-                let input = &inputs[input_index];
-                input_index += 1;
-
-                let value = input.trim().parse()
-                    .expect(&format!("Not a number: {}", input));
-
-                mem[dest] = value;
-
-                pc += 2;
-            }
-            // output
-            4 => {
-                let value = get_parameter_value(1, pc, mem, &modes);
-                outputs.push(format!("{}", value));
-
-                pc += 2;
-            }
-            // jump-if-true, jump-if-false
-            5 | 6 => {
-                let (value, dest) = get_jump_op_params(pc, mem, &modes);
-
-                let condition = match opcode {
-                    5 => value != 0,
-                    6 => value == 0,
-                    // other opcodes are filtered by the outer match, so this is fine
-                    _ => unreachable!(),
-                };
-
-                if condition {
-                    pc = dest;
-                } else {
-                    pc += 3;
-                }
-            }
-            // less than, equals
-            7 | 8 => {
-                let (a, b, dest) = get_ternary_op_params(pc, mem, &modes);
-
-                let condition = match opcode {
-                    7 => a < b,
-                    8 => a == b,
-                    // other opcodes are filtered by the outer match, so this is fine
-                    _ => unreachable!(),
-                };
-
-                mem[dest] = if condition { 1 } else { 0 };
-
-                pc += 4;
-            }
-            // halt
-            99 => break,
-            _ => {
-                dump_memory(pc, mem);
-                panic!("Unknown opcode: {}", opcode);
-            }
+        match interpret_step(mem, &mut pc, inputs.get(input_index).cloned()) {
+            InterpretStep::Input => input_index += 1,
+            InterpretStep::Output(output) => outputs.push(output),
+            InterpretStep::Halt => break,
+            InterpretStep::Nothing => {}
         }
     }
 
