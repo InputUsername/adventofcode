@@ -1,6 +1,6 @@
 use std::fs;
 
-use intcode;
+use intcode::Computer;
 
 fn main() {
     let input: Vec<i64> = fs::read_to_string("input")
@@ -9,38 +9,37 @@ fn main() {
         .map(|n| n.trim().parse().unwrap())
         .collect();
 
-    part1(input.clone());
-    part2(input.clone());
+    let cpu = Computer::from(&input[..]);
+
+    part1(cpu.clone());
+    part2(cpu.clone());
 }
 
-fn part1(mut input: Vec<i64>) {
-    input[1] = 12;
-    input[2] = 2;
+fn part1(mut cpu: Computer) {
+    cpu.memory[1] = 12;
+    cpu.memory[2] = 2;
 
-    let _ = intcode::interpret(&mut input, &[]);
+    let _ = cpu.run(&[]);
 
-    println!("{}", input[0]);
+    println!("{}", cpu.memory[0]);
 }
 
-fn part2(input: Vec<i64>) {
-    let mut mem = vec![0; input.len()];
+fn part2(cpu: Computer) {
+    const VALUE: i64 = 19690720;
 
     let mut done = false;
     for noun in 0..99 {
         for verb in 0..99 {
-            mem.clone_from(&input);
-            mem[1] = noun;
-            mem[2] = verb;
-
-            let _ = intcode::interpret(&mut mem, &[]);
-
-            if mem[0] == 19690720 {
+            let mut cpu = cpu.clone();
+            cpu.memory[1] = noun;
+            cpu.memory[2] = verb;
+            let _ = cpu.run(&[]);
+            if cpu.memory[0] == VALUE {
                 println!("{}", 100 * noun + verb);
                 done = true;
                 break;
             }
         }
-
         if done {
             break;
         }
