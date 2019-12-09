@@ -1,195 +1,258 @@
-use std::convert::TryInto;
+use std::convert::{From, TryInto};
 
 const MAX_PARAMETERS: usize = 3;
 
-type ParameterModes = [i64; MAX_PARAMETERS];
+#[repr(u8)]
+#[derive(Clone, Copy)]
+enum ParameterMode {
+    Position,
+    Immediate,
+    Relative,
+}
+
+impl ParameterMode {
+    fn new(mode: i64) -> Self {
+        match mode {
+            0 => ParameterMode::Position,
+            1 => ParameterMode::Immediate,
+            2 => ParameterMode::Relative,
+            n => panic!("Unknown parameter mode: {}", n),
+        }
+    }
+}
+
+type ParameterModes = [ParameterMode; MAX_PARAMETERS];
+
 type Instruction = (i64, ParameterModes);
 
 pub enum InterpretStep {
     Input,
-    Output(String),
+    Output(i64),
     Halt,
     Nothing,
 }
 
-/// Parse a single instruction into an opcode and the parameter modes.
-fn parse_instruction(instruction: i64) -> Instruction {
-    let opcode = instruction % 100;
-    let mut modes_mask = instruction / 100;
-    let mut modes = [0; MAX_PARAMETERS];
-    for i in 0..MAX_PARAMETERS {
-        modes[i] = modes_mask % 10;
-        modes_mask /= 10;
-    }
-    (opcode, modes)
+#[derive(Clone)]
+pub struct Computer {
+    memory: Vec<i64>,
+    pc: usize,
+    relative_base: isize,
 }
 
-/// Get the value of a parameter, depending on the parameter mode.
-fn get_parameter_value(index: usize, pc: usize, mem: &[i64], modes: &ParameterModes) -> i64 {
-    match modes[index - 1] {
-        // Position mode
-        0 => {
-            let addr: usize = mem[pc + index].try_into().unwrap();
-            mem[addr]
-        },
-
-        // Immediate mode
-        1 => mem[pc + index],
-
-        // Other modes don't exist
-        _ => unreachable!(),
+impl From<&[i64]> for Computer {
+    fn from(slice: &[i64]) -> Self {
+        Self {
+            memory: slice.to_vec(),
+            pc: 0,
+            relative_base: 0,
+        }
     }
 }
 
-/// Jump operators take two parameters (either position or immediate mode),
-/// the second of which is an address to jump to.
-fn get_jump_op_params(pc: usize, mem: &[i64], modes: &ParameterModes) -> (i64, usize) {
-    let a = get_parameter_value(1, pc, mem, modes);
-    let b = get_parameter_value(2, pc, mem, modes).try_into().unwrap();
-
-    (a, b)
-}
-
-/// Ternary operators take two parameters (either position or immediate mode)
-/// and write their output to the third parameter in position mode.
-fn get_ternary_op_params(pc: usize, mem: &[i64], modes: &ParameterModes) -> (i64, i64, usize) {
-    let a = get_parameter_value(1, pc, mem, modes);
-    let b = get_parameter_value(2, pc, mem, modes);
-    let c = mem[pc + 3].try_into().unwrap();
-
-    (a, b, c)
-}
-
-/// Print a memory dump to stderr.
-fn dump_memory(pc: usize, mem: &[i64]) {
-    const SIZE: usize = 20;
-    const PAD: usize = 7;
-
-    eprintln!("{}", "-".repeat(SIZE * PAD));
-    eprintln!("MEMORY DUMP");
-    eprintln!("{}", "-".repeat(SIZE * PAD));
-
-    for (start_addr, chunk) in mem.chunks(SIZE).enumerate().map(|(i, chunk)| (SIZE * i, chunk)) {
-        for (i, _) in chunk.iter().enumerate() {
-            eprint!("{: >7}", start_addr + i);
+impl Computer {
+    /// Construct a new empty computer.
+    pub fn new() -> Self {
+        Self {
+            memory: Vec::new(),
+            pc: 0,
+            relative_base: 0,
         }
-        eprintln!();
-        for val in chunk {
-            eprint!("{: >7}", val);
-        }
-        eprintln!();
-        if pc >= start_addr && pc < start_addr + SIZE {
-            eprint!("{}", " ".repeat((pc - start_addr) * PAD + 1));
-            eprintln!("{}", "^".repeat(PAD - 1));
-        } else {
+    }
+
+    /// Print a memory dump to stderr.
+    fn dump_memory(&self) {
+        const SIZE: usize = 20;
+        const PAD: usize = 7;
+
+        eprintln!("{}", "-".repeat(SIZE * PAD));
+        eprintln!("MEMORY DUMP");
+        eprintln!("{}", "-".repeat(SIZE * PAD));
+
+        for (start_addr, chunk) in self.memory.chunks(SIZE).enumerate().map(|(i, chunk)| (SIZE * i, chunk)) {
+            for (i, _) in chunk.iter().enumerate() {
+                eprint!("{: >7}", start_addr + i);
+            }
             eprintln!();
-        }
-    }
-
-    eprintln!("{}", "-".repeat(SIZE * PAD));
-}
-
-/// Perform a single instruction and return its side effect (input, output, halt or nothing).
-pub fn interpret_step(mem: &mut [i64], pc: &mut usize, input: Option<String>) -> InterpretStep {
-    let (opcode, modes) = parse_instruction(mem[*pc]);
-    match opcode {
-        // add
-        1 | 2 => {
-            let (a, b, dest) = get_ternary_op_params(*pc, mem, &modes);
-
-            match opcode {
-                1 => mem[dest] = a + b,
-                2 => mem[dest] = a * b,
-                // other opcodes are filtered by the outer match, so this is fine
-                _ => unreachable!(),
+            for val in chunk {
+                eprint!("{: >7}", val);
             }
-
-            *pc += 4;
-        }
-        // input
-        3 => {
-            let dest: usize = mem[*pc + 1].try_into().unwrap();
-
-            let input = input.unwrap();
-
-            let value = input.trim().parse()
-                .expect(&format!("Not a number: {}", input));
-
-            mem[dest] = value;
-
-            *pc += 2;
-
-            return InterpretStep::Input;
-        }
-        // output
-        4 => {
-            let value = get_parameter_value(1, *pc, mem, &modes);
-
-            *pc += 2;
-
-            return InterpretStep::Output(value.to_string());
-        }
-        // jump-if-true, jump-if-false
-        5 | 6 => {
-            let (value, dest) = get_jump_op_params(*pc, mem, &modes);
-
-            let condition = match opcode {
-                5 => value != 0,
-                6 => value == 0,
-                // other opcodes are filtered by the outer match, so this is fine
-                _ => unreachable!(),
-            };
-
-            if condition {
-                *pc = dest;
+            eprintln!();
+            if self.pc >= start_addr && self.pc < start_addr + SIZE {
+                eprint!("{}", " ".repeat((self.pc - start_addr) * PAD + 1));
+                eprintln!("{}", "^".repeat(PAD - 1));
             } else {
-                *pc += 3;
+                eprintln!();
             }
         }
-        // less than, equals
-        7 | 8 => {
-            let (a, b, dest) = get_ternary_op_params(*pc, mem, &modes);
 
-            let condition = match opcode {
-                7 => a < b,
-                8 => a == b,
-                // other opcodes are filtered by the outer match, so this is fine
-                _ => unreachable!(),
-            };
-
-            mem[dest] = if condition { 1 } else { 0 };
-
-            *pc += 4;
-        }
-        // halt
-        99 => return InterpretStep::Halt,
-        _ => {
-            dump_memory(*pc, mem);
-            panic!("Unknown opcode: {}", opcode);
-        }
+        eprintln!("{}", "-".repeat(SIZE * PAD));
     }
 
-    InterpretStep::Nothing
-}
-
-/// Interpret an Intcode program stored in `mem`, using `inputs` to simulate input,
-/// and return a vector of all output values.
-pub fn interpret(mem: &mut [i64], inputs: &[String]) -> Vec<String> {
-    let mut pc = 0;
-
-    let mut input_index = 0;
-    let mut outputs = Vec::new();
-
-    loop {
-        match interpret_step(mem, &mut pc, inputs.get(input_index).cloned()) {
-            InterpretStep::Input => input_index += 1,
-            InterpretStep::Output(output) => outputs.push(output),
-            InterpretStep::Halt => break,
-            InterpretStep::Nothing => {}
+    /// Parse the current instruction at the program counter.
+    fn parse_instruction(&self) -> Instruction {
+        let instruction = self.memory[self.pc];
+        let opcode = instruction % 100;
+        let mut modes_mask = instruction / 100;
+        let mut modes = [ParameterMode::Position; MAX_PARAMETERS];
+        for i in 0..MAX_PARAMETERS {
+            modes[i] = ParameterMode::new(modes_mask % 10);
+            modes_mask /= 10;
         }
+        (opcode, modes)
     }
 
-    outputs
+    /// Read a parameter's value, respecting the parameter modes.
+    fn get_parameter_value(&self, index: usize, modes: &ParameterModes) -> i64 {
+        let address: usize = match modes[index] {
+            ParameterMode::Position => self.memory[self.pc + 1 + index].try_into().unwrap(),
+            ParameterMode::Immediate => self.pc + 1 + index,
+            ParameterMode::Relative => {
+                let offset: isize = self.memory[self.pc + 1 + index].try_into().unwrap();
+                (self.relative_base + offset).try_into().unwrap()
+            },
+        };
+        if address >= self.memory.len() {
+            return 0;
+        }
+        self.memory[address]
+    }
+
+    /// Write a value to a destination parameter, respecting the parameter modes.
+    fn write(&mut self, index: usize, modes: &ParameterModes, value: i64) {
+        let address: usize = match modes[index] {
+            ParameterMode::Position => self.memory[self.pc + 1 + index].try_into().unwrap(),
+            ParameterMode::Immediate => panic!("Destination parameters cannot be in immediate mode"),
+            ParameterMode::Relative => {
+                let offset: isize = self.memory[self.pc + 1 + index].try_into().unwrap();
+                (self.relative_base + offset).try_into().unwrap()
+            }
+        };
+        if address >= self.memory.len() {
+            self.memory.resize(address + 1, 0);
+        }
+        self.memory[address] = value;
+    }
+
+    /// Get the parameters for a binary operation, respecting the parameter modes.
+    fn get_binary_op_parameters(&self, modes: &ParameterModes) -> (i64, i64) {
+        let a = self.get_parameter_value(0, modes);
+        let b = self.get_parameter_value(1, modes);
+
+        (a, b)
+    }
+
+    /// Get the parameters for a jump operation:
+    /// a condition value and a jump address.
+    fn get_jump_op_parameters(&self, modes: &ParameterModes) -> (i64, usize) {
+        let value = self.get_parameter_value(0, modes);
+        let location = self.get_parameter_value(1, modes).try_into().unwrap();
+
+        (value, location)
+    }
+
+    /// Interpret one instruction and return its side effect.
+    pub fn step(&mut self, input: Option<i64>) -> InterpretStep {
+        let (opcode, modes) = self.parse_instruction();
+
+        match opcode {
+            // add, multiply
+            1 | 2 => {
+                let (a, b) = self.get_binary_op_parameters(&modes);
+
+                let value = match opcode {
+                    1 => a + b,
+                    2 => a * b,
+                    // other opcodes are filtered by the outer match, so this is fine
+                    _ => unreachable!(),
+                };
+
+                self.write(2, &modes, value);
+
+                self.pc += 4;
+            }
+            // input
+            3 => {
+                self.write(0, &modes, input.unwrap());
+                
+                self.pc += 2;
+
+                return InterpretStep::Input;
+            }
+            // output
+            4 => {
+                let value = self.get_parameter_value(0, &modes);
+
+                self.pc += 2;
+
+                return InterpretStep::Output(value);
+            }
+            // jump-if-true, jump-if-false
+            5 | 6 => {
+                let (value, location) = self.get_jump_op_parameters(&modes);
+
+                let condition = match opcode {
+                    5 => value != 0,
+                    6 => value == 0,
+                    // other opcodes are filtered by the outer match, so this is fine
+                    _ => unreachable!(),
+                };
+
+                if condition {
+                    self.pc = location;
+                } else {
+                    self.pc += 3;
+                }
+            }
+            // less than, equals
+            7 | 8 => {
+                let (a, b) = self.get_binary_op_parameters(&modes);
+
+                let comparison = match opcode {
+                    7 => a < b,
+                    8 => a == b,
+                    // other opcodes are filtered by the outer match, so this is fine
+                    _ => unreachable!(),
+                };
+
+                self.write(2, &modes, if comparison { 1 } else { 0 });
+
+                self.pc += 4;
+            }
+            // relative base offset
+            9 => {
+                let value: isize = self.get_parameter_value(0, &modes).try_into().unwrap();
+
+                self.relative_base += value;
+
+                self.pc += 2;
+            }
+            // halt
+            99 => return InterpretStep::Halt,
+            _ => {
+                self.dump_memory();
+                panic!("Unknown opcode: {}", opcode);
+            }
+        }
+
+        InterpretStep::Nothing
+    }
+
+    /// Interpret an Intcode program.
+    pub fn run(&mut self, inputs: &[i64]) -> Vec<i64> {
+        let mut input_index = 0;
+        let mut outputs = Vec::new();
+
+        loop {
+            match self.step(inputs.get(input_index).copied()) {
+                InterpretStep::Input => input_index += 1,
+                InterpretStep::Output(output) => outputs.push(output),
+                InterpretStep::Halt => break,
+                InterpretStep::Nothing => {}
+            }
+        }
+
+        outputs
+    }
 }
 
 #[cfg(test)]
@@ -198,10 +261,12 @@ mod tests {
     
     #[test]
     fn test_parameter_modes() {
-        let mut mem = [1002,4,3,4,33];
-        let _ = interpret(&mut mem, &[]);
+        let mem = [1002,4,3,4,33];
+        let mut cpu = Computer::from(&mem[..]);
+
+        let _ = cpu.run(&[]);
         assert_eq!(
-            mem,
+            cpu.memory,
             [1002,4,3,4,99]
         );
     }
@@ -209,81 +274,89 @@ mod tests {
     #[test]
     fn test_io() {
         let mem = [3,5,4,5,99,0];
+        let mut cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["700".into()]);
-        assert_eq!(output, ["700"]);
+        let output = cpu.run(&[700]);
+        assert_eq!(output, [700]);
 
         let mem = [3,5,104,5,99,0];
+        let mut cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["77".into()]);
-        assert_eq!(output, ["5"]);
+        let output = cpu.run(&[77]);
+        assert_eq!(output, [5]);
     }
 
     #[test]
     fn test_jumps_position_mode() {
         let mem = [3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9];
+        let cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["0".into()]);
-        assert_eq!(output, ["0"]);
+        let output = cpu.clone().run(&[0]);
+        assert_eq!(output, [0]);
 
-        let output = interpret(&mut mem.clone(), &["1".into()]);
-        assert_eq!(output, ["1"]);
+        let output = cpu.clone().run(&[1]);
+        assert_eq!(output, [1]);
     }
 
     #[test]
     fn test_jumps_immediate_mode() {
         let mem = [3,3,1105,-1,9,1101,0,0,12,4,12,99,1];
+        let cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["0".into()]);
-        assert_eq!(output, ["0"]);
+        let output = cpu.clone().run(&[0]);
+        assert_eq!(output, [0]);
 
-        let output = interpret(&mut mem.clone(), &["1".into()]);
-        assert_eq!(output, ["1"]);
+        let output = cpu.clone().run(&[1]);
+        assert_eq!(output, [1]);
     }
 
     #[test]
     fn test_equal_position_mode() {
         let mem = [3,9,8,9,10,9,4,9,99,-1,8];
+        let cpu = Computer::from(&mem[..]);
         
-        let output = interpret(&mut mem.clone(), &["8".into()]);
-        assert_eq!(output, ["1"]);
+        let output = cpu.clone().run(&[8]);
+        assert_eq!(output, [1]);
 
-        let output = interpret(&mut mem.clone(), &["4".into()]);
-        assert_eq!(output, ["0"]);
+        let output = cpu.clone().run(&[4]);
+        assert_eq!(output, [0]);
 
     }
     
     #[test]
     fn test_lessthan_position_mode() {
         let mem = [3,9,7,9,10,9,4,9,99,-1,8];
+        let cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["7".into()]);
-        assert_eq!(output, ["1"]);
+        let output = cpu.clone().run(&[7]);
+        assert_eq!(output, [1]);
 
-        let output = interpret(&mut mem.clone(), &["9".into()]);
-        assert_eq!(output, ["0"]);
+        let output = cpu.clone().run(&[9]);
+        assert_eq!(output, [0]);
     }
 
     #[test]
     fn test_equal_immediate_mode() {
         let mem = [3,3,1108,-1,8,3,4,3,99];
+        let cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["8".into()]);
-        assert_eq!(output, ["1"]);
+        let output = cpu.clone().run(&[8]);
+        assert_eq!(output, [1]);
 
-        let output = interpret(&mut mem.clone(), &["4".into()]);
-        assert_eq!(output, ["0"]);
+        let output = cpu.clone().run(&[4]);
+        assert_eq!(output, [0]);
     }
 
     #[test]
     fn test_lessthan_immediate_mode() {
         let mem = [3,3,1107,-1,8,3,4,3,99];
+        let cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["7".into()]);
-        assert_eq!(output, ["1"]);
+        let output = cpu.clone().run(&[7]);
+        assert_eq!(output, [1]);
 
-        let output = interpret(&mut mem.clone(), &["9".into()]);
-        assert_eq!(output, ["0"]);
+        let output = cpu.clone().run(&[9]);
+        assert_eq!(output, [0]);
     }
 
     #[test]
@@ -293,14 +366,44 @@ mod tests {
             1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,
             999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99
         ];
+        let cpu = Computer::from(&mem[..]);
 
-        let output = interpret(&mut mem.clone(), &["7".into()]);
-        assert_eq!(output, ["999"]);
+        let output = cpu.clone().run(&[7]);
+        assert_eq!(output, [999]);
 
-        let output = interpret(&mut mem.clone(), &["8".into()]);
-        assert_eq!(output, ["1000"]);
+        let output = cpu.clone().run(&[8]);
+        assert_eq!(output, [1000]);
 
-        let output = interpret(&mut mem.clone(), &["9".into()]);
-        assert_eq!(output, ["1001"]);
+        let output = cpu.clone().run(&[9]);
+        assert_eq!(output, [1001]);
+    }
+
+    #[test]
+    fn test_relative_mode_quine() {
+        let mem = [109,1,204,-1,1001,100,1,100,1008,100,16,101,1006,101,0,99];
+        let mut cpu = Computer::from(&mem[..]);
+
+        let output = cpu.run(&[]);
+        assert_eq!(
+            output,
+            [109,1,204,-1,1001,100,1,100,1008,100,16,101,1006,101,0,99]
+        );
+    }
+
+    #[test]
+    fn test_large_numbers() {
+        let mem = [1102,34915192,34915192,7,4,7,99,0];
+        let mut cpu = Computer::from(&mem[..]);
+
+        let _ = cpu.run(&[]);
+
+        let mem = [104,1125899906842624,99];
+        let mut cpu = Computer::from(&mem[..]);
+
+        let output = cpu.run(&[]);
+        assert_eq!(
+            output,
+            [1125899906842624]
+        );
     }
 }
