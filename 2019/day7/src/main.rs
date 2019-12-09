@@ -1,6 +1,6 @@
 use std::fs;
 
-use intcode::{self, InterpretStep};
+use intcode::{Computer, InterpretStep};
 
 fn main() {
     let input: Vec<i64> = fs::read_to_string("input")
@@ -9,8 +9,10 @@ fn main() {
         .map(|n| n.trim().parse().unwrap())
         .collect();
 
-    part1(&input);
-    part2(&input);
+    let cpu = Computer::from(&input[..]);
+
+    part1(cpu.clone());
+    part2(cpu.clone());
 }
 
 fn swap(slice: &mut [i64], i: usize, j: usize) {
@@ -19,15 +21,15 @@ fn swap(slice: &mut [i64], i: usize, j: usize) {
     slice[j] = tmp;
 }
 
-fn permutations(input: &[i64], setting: &mut [i64], f: fn(&[i64], &[i64]) -> i64, i: usize, j: usize) -> i64 {
+fn permutations(cpu: &Computer, setting: &mut [i64], f: fn(&Computer, &[i64]) -> i64, i: usize, j: usize) -> i64 {
     if i == j {
-        return f(input, setting);
+        return f(cpu, setting);
     }
 
     let mut max_output = 0;
     for k in i..=j {
         swap(setting, k, i);
-        let output = permutations(input, setting, f, i + 1, j);
+        let output = permutations(cpu, setting, f, i + 1, j);
         if output > max_output {
             max_output = output;
         }
@@ -37,22 +39,20 @@ fn permutations(input: &[i64], setting: &mut [i64], f: fn(&[i64], &[i64]) -> i64
     return max_output;
 }
 
-fn try_permutation(input: &[i64], setting: &[i64]) -> i64 {
-    let mut mem: Vec<i64> = input.to_vec();
-    let mut outputs = intcode::interpret(&mut mem, &[setting[0].to_string(), "0".to_string()]);
-    let mut output = outputs.pop().unwrap();
-    for n in &setting[1..] {
-        mem.copy_from_slice(input);
-        outputs = intcode::interpret(&mut mem, &[n.to_string(), output]);
-        output = outputs.pop().unwrap();
+fn try_permutation(cpu: &Computer, setting: &[i64]) -> i64 {
+    let mut input = 0;
+    for &n in setting {
+        let mut amp = cpu.clone();
+        let outputs = amp.run(&[n, input]);
+        input = outputs[0];
     }
-    output.parse().unwrap()
+    input
 }
 
 /// Partially Interpret an Intcode program up to the next output or halt instruction
-fn interpret_partial(mem: &mut [i64], pc: &mut usize, input: String) -> Option<String> {
+fn interpret_partial(cpu: &mut Computer, input: i64) -> Option<i64> {
     loop {
-        match intcode::interpret_step(mem, pc, Some(input.clone())) {
+        match cpu.step(Some(input)) {
             InterpretStep::Output(output) => return Some(output),
             InterpretStep::Halt => return None,
             _ => {}
@@ -60,43 +60,40 @@ fn interpret_partial(mem: &mut [i64], pc: &mut usize, input: String) -> Option<S
     }
 }
 
-fn try_feedback_loop(input: &[i64], setting: &[i64]) -> i64 {
-    let amp_count = setting.len();
-
-    let mut memories = Vec::new();
-    let mut pc = vec![0; amp_count];
-
-    for (i, n) in setting.iter().enumerate() {
-        memories.push(input.to_vec());
-        let _ = intcode::interpret_step(&mut memories[i], &mut pc[i], Some(n.to_string()));
+fn try_feedback_loop(cpu: &Computer, setting: &[i64]) -> i64 {
+    let mut amps = Vec::new();
+    for &n in setting {
+        let mut amp = cpu.clone();
+        let _ = amp.step(Some(n));
+        amps.push(amp);
     }
 
-    let mut input = "0".to_string();
+    let mut input = 0;
     loop {
-        for i in 0..amp_count {
-            if let Some(output) = interpret_partial(&mut memories[i], &mut pc[i], input.clone()) {
+        for amp in amps.iter_mut() {
+            if let Some(output) = interpret_partial(amp, input) {
                 input = output;
             } else {
                 // If the first amp halts, all amps will halt after it and "input" will contain the output
                 // of the last amp in the previous loop
-                return input.parse().unwrap();
+                return input;
             }
         }
     }
 }
 
-fn part1(input: &[i64]) {
+fn part1(cpu: Computer) {
     let mut setting: Vec<i64> = (0..=4).collect();
     let len = setting.len();
-    let max_output = permutations(input, &mut setting, try_permutation, 0, len - 1);
+    let max_output = permutations(&cpu, &mut setting, try_permutation, 0, len - 1);
 
     println!("{}", max_output);
 }
 
-fn part2(input: &[i64]) {
+fn part2(cpu: Computer) {
     let mut setting: Vec<i64> = (5..=9).collect();
     let len = setting.len();
-    let max_output = permutations(input, &mut setting, try_feedback_loop, 0, len - 1);
+    let max_output = permutations(&cpu, &mut setting, try_feedback_loop, 0, len - 1);
 
     println!("{}", max_output);
 }
