@@ -1,3 +1,6 @@
+//! This crate provides a fully-working, fully-compliant
+//! Intcode interpreter for Advent of Code 2019.
+
 use std::convert::{From, TryInto};
 
 const MAX_PARAMETERS: usize = 3;
@@ -25,16 +28,23 @@ type ParameterModes = [ParameterMode; MAX_PARAMETERS];
 
 type Instruction = (i64, ParameterModes);
 
+/// Represents the result of running a single instruction.
 pub enum InterpretStep {
+    /// The executed instruction caused input to be read.
     Input,
+    /// The executed instruction caused output.
     Output(i64),
+    /// The executed instruction caused the program to halt.
     Halt,
+    /// The executed instruction did not perform input or output and did not halt the program.
     Nothing,
 }
 
+/// Represents an Intcode computer containing memory, a program counter
+/// and a relative base.
 #[derive(Clone)]
 pub struct Computer {
-    memory: Vec<i64>,
+    pub memory: Vec<i64>,
     pc: usize,
     relative_base: isize,
 }
