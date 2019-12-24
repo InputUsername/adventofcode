@@ -2,6 +2,8 @@
 //! Intcode interpreter for Advent of Code 2019.
 
 use std::convert::{From, TryInto};
+use std::path::Path;
+use std::fs;
 
 const MAX_PARAMETERS: usize = 3;
 
@@ -64,6 +66,20 @@ impl Computer {
     pub fn new() -> Self {
         Self {
             memory: Vec::new(),
+            pc: 0,
+            relative_base: 0,
+        }
+    }
+
+    /// Construct a computer from a file.
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        let memory = fs::read_to_string(path)
+            .unwrap()
+            .split(',')
+            .map(|n| n.parse().unwrap())
+            .collect();
+        Self {
+            memory,
             pc: 0,
             relative_base: 0,
         }
