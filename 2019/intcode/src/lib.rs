@@ -279,6 +279,12 @@ impl Computer {
 
         outputs
     }
+
+    /// Check if the current instruction is an input instruction.
+    pub fn wants_input(&self) -> bool {
+        let (opcode, _) = self.parse_instruction();
+        opcode == 3
+    }
 }
 
 #[cfg(test)]
