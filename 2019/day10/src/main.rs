@@ -1,6 +1,6 @@
 use std::fs;
 use std::collections::HashSet;
-use std::f32::consts::{PI, FRAC_PI_2};
+use std::f32::consts::PI;
 
 type Point = (i32, i32);
 
@@ -21,6 +21,7 @@ fn main() {
     let points = parse_points(&input);
 
     part1(&points);
+    part2(&points);
 }
 
 fn gcd(a: i32, b: i32) -> i32 {
@@ -79,6 +80,48 @@ fn part1(points: &HashSet<Point>) {
     let (_, c) = find_max_visible(points);
 
     println!("{}", c);
+}
+
+fn direction(a: Point, b: Point) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let mut angle = f32::atan2(dx as f32, -dy as f32);
+    if angle < 0.0 {
+        angle += 2.0 * PI;
+    }
+    angle
+}
+
+fn part2(points: &HashSet<Point>) {
+    let (a, _) = find_max_visible(points);
+
+    // Find view lines (points at the same angle ordered by distance)
+    let mut angles: Vec<(f32, Vec<Point>)> = Vec::new();
+    for &b in points.iter() {
+        let angle = direction(a, b);
+        if let Some((_, line)) = angles.iter_mut().find(|(ang, _)| angle == *ang) {
+            line.push(b);
+        } else {
+            angles.push((angle, vec![b]));
+        }
+    }
+
+    // Sort view lines by angle
+    angles.sort_by(|(a1, _), (a2, _)| a1.partial_cmp(a2).unwrap());
+
+    let mut destroyed = 0;
+    'outer: loop {
+        for (_, line) in angles.iter_mut() {
+            if !line.is_empty() {
+                // Keep destroying asteroids until we hit 200
+                let last_destroyed = line.remove(0);
+                destroyed += 1;
+                if destroyed == 200 {
+                    println!("{}", 100*last_destroyed.0 + last_destroyed.1);
+                    break 'outer;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
