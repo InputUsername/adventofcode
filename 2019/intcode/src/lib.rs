@@ -76,7 +76,7 @@ impl Computer {
         let memory = fs::read_to_string(path)
             .unwrap()
             .split(',')
-            .map(|n| n.parse().unwrap())
+            .map(|n| n.trim().parse().unwrap())
             .collect();
         Self {
             memory,
